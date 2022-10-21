@@ -16,13 +16,11 @@ for (const connections of connectionCounts) {
     describe(`${connections} connections`, () => {
         const testContent = randomBytes(1024 * 1024).toString('hex')
 
-        test('write file', async () => {
+        test('write and read file', async () => {
             await testHarness(
                 async () => await writeFile(testFile, testContent),
             )
-        })
 
-        test('read file', async () => {
             expect(await fileExists(testFile)).toBe(false)
 
             await testHarness(async () => {

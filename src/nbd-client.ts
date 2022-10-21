@@ -1,11 +1,11 @@
 import { ioctl } from 'async-ioctl'
-import { endianness } from 'os'
 import { setMaxListeners } from 'events'
+import { cpus, endianness } from 'os'
 import { FileHandle, open } from 'fs/promises'
 import { NetConnectOpts, Socket, createConnection } from 'net'
 
-import { HandshakeExport, Handshake } from './nbd-handshake'
 import { IOCTL_CODES } from './nbd-constants'
+import { HandshakeExport, Handshake } from './nbd-handshake'
 
 export interface NBDOptions {
     socket: NetConnectOpts
@@ -107,13 +107,11 @@ export class NBD {
             throw new Error('NBD device missing')
         }
 
-        const connectionsCount = options.connections ?? 1
-
-        if (connectionsCount < 1) {
-            throw new Error('NBD client needs at least 1 connection')
-        }
-
         const connections: Connection[] = []
+        const connectionsCount = Math.max(
+            1,
+            options.connections ?? cpus().length,
+        )
         const teardown = () => {
             abort?.signal.removeEventListener('abort', teardown)
 
@@ -250,9 +248,7 @@ export class NBD {
                 const name = ioctlNames.get(error.request)
 
                 if (name) {
-                    throw new Error(
-                        `Error ${error.code} running ${name} ioctl on NBD device`,
-                    )
+                    error.message = `Error ${error.code} running ${name} ioctl on NBD device ${this.options.device}`
                 }
             }
 
