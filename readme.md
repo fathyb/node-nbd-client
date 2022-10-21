@@ -1,6 +1,6 @@
 # node-nbd-client
 
-Linux NBD client and library for Node.js. Built to automated block storage systems using container runtimes like Docker.
+Linux NBD client and library for Node.js. Built to automate block storage systems using container runtimes like Docker.
 
 ## Features
 
