@@ -1,0 +1,17 @@
+version: '3.8'
+services:
+    test:
+        privileged: true
+        volumes:
+            - /dev:/dev
+        links:
+            - nbdkit
+        build:
+            target: test
+            context: ..
+            dockerfile: test/Dockerfile
+    nbdkit:
+        build:
+            target: nbdkit
+            context: ..
+            dockerfile: test/Dockerfile
