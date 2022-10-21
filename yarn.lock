@@ -777,10 +777,10 @@ argparse@^1.0.7:
   dependencies:
     sprintf-js "~1.0.2"
 
-async-ioctl@^1.0.4-next.1:
-  version "1.0.4-next.1"
-  resolved "https://registry.yarnpkg.com/async-ioctl/-/async-ioctl-1.0.4-next.1.tgz#250dbad26b0c7134980c0045b00e3e247e9e284f"
-  integrity sha512-qN1Nr0MICDvt6OVhKQ55+fYMJZ6eYXN5DJXjWkL/JaGgssAOtP2kinqJTALaFQgdtUSBsdY6PQumbBuaplMgXQ==
+async-ioctl@^1.0.4:
+  version "1.0.4"
+  resolved "https://registry.yarnpkg.com/async-ioctl/-/async-ioctl-1.0.4.tgz#10ffb3394b86c53d84531472277ea45f1848169f"
+  integrity sha512-MrqwqYkZw1eVCiaJWeBNLoaZudHEGvjgjfEw9xUFgUwyrw6sPPDElddGtUXEz8tbGtcy0UkuIFm4u7LNc5Rmow==
   dependencies:
     nan "^2.17.0"
     node-gyp "^9.3.0"
