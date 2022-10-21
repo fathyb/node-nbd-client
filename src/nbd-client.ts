@@ -2,14 +2,23 @@ import { ioctl } from 'async-ioctl'
 import { FileHandle, open } from 'fs/promises'
 import { NetConnectOpts, Socket, createConnection } from 'net'
 
-import { HandshakeExport, NbdHandshake } from './nbd-handshake'
+import { HandshakeExport, Handshake } from './nbd-handshake'
+import {
+    NBD_DO_IT,
+    NBD_SET_SOCK,
+    NBD_SET_FLAGS,
+    NBD_CLEAR_SOCK,
+    NBD_SET_BLKSIZE,
+    NBD_SET_SIZE_BLOCKS,
+    BLKGETSIZE64,
+} from './nbd-constants'
+import { setMaxListeners } from 'events'
 
-export interface NbdConnectOptions {
+export interface NBDOptions {
     socket: NetConnectOpts
     device: string
     export: string
 
-    abort?: AbortController
     persist?: boolean
     blockSize?: number
     connections?: number
@@ -17,166 +26,211 @@ export interface NbdConnectOptions {
     connected?(): void
 }
 
-export async function nbd(options: NbdConnectOptions) {
-    let attempts = 0
+export class NBD {
+    private device: null | FileHandle = null
+    private promise: null | Promise<void> = null
+    private readonly abort = new AbortController()
 
-    while (true) {
-        try {
-            const client = new NbdClient(options)
+    constructor(private readonly options: NBDOptions) {}
 
-            await client.start()
-
-            if (options.persist === false) {
-                return
-            } else {
-                throw new Error('Connection closed')
-            }
-        } catch (error) {
-            if (options.abort?.signal.aborted) {
-                return
-            }
-
-            const attempt = ++attempts
-            const delay = backoff(attempt)
-
-            console.error(
-                'NBD failure, reconnecting in %ss, attempt=%s',
-                Math.round(delay) / 1000,
-                attempt,
-                error,
-            )
-
-            await sleep(delay, options.abort)
+    public async size() {
+        if (!this.device) {
+            throw new Error('NBD client not started')
         }
-    }
-}
 
-class NbdClient {
-    constructor(private readonly options: NbdConnectOptions) {}
+        const buffer = Buffer.alloc(8)
+
+        await ioctl(this.device.fd, BLKGETSIZE64, buffer)
+
+        return buffer.readBigUint64LE(0)
+    }
+
+    /** Stop the NBD client. */
+    public stop() {
+        this.abort.abort()
+    }
 
     /** Start the NBD client. */
     public async start() {
-        // Start by opening the block device and the network connections
-        const { options } = this
-        const { abort } = options
-        const [device, connections] = await Promise.all([
-            open(options.device, 'r+'),
-            Promise.all(
-                Array(options.connections ?? 1)
-                    .fill(0)
-                    .map(() => this.connect()),
-            ),
-        ])
-        const sockets = connections.map((c) => c.socket)
-        const fds = sockets.map((s) => captureSocket(s))
-        const onAbort = () => {
-            for (const socket of sockets) {
-                restoreSocket(socket).resume().destroy(new AbortError())
-            }
+        if (this.promise) {
+            throw new Error('NBD client already started')
         }
 
-        const { size, flags } = connections[0].export
+        this.promise = this.run()
 
-        for (const connection of connections) {
-            if (connection.export.size !== size) {
-                throw new Error(
-                    `Invalid size for connection: ${connection.export.size}, expected: ${size}`,
-                )
-            }
+        return await this.promise
+    }
 
-            if (connection.export.flags !== flags) {
-                throw new Error(
-                    `Invalid flags for connection: ${connection.export.flags}, expected: ${flags}`,
-                )
-            }
-        }
+    /** Reconnection loop. */
+    private async run() {
+        let attempts = 0
+        const { abort, options } = this
+        const { persist } = options
 
-        options.connected?.()
-
-        if (abort?.signal.aborted) {
-            onAbort()
-        }
-
-        abort?.signal.addEventListener('abort', onAbort)
-
-        const { fd } = device
-        const blockSize = options.blockSize ?? 4096
+        this.device = await open(options.device, 'r+')
 
         try {
+            while (true) {
+                try {
+                    await this.attach()
+                } catch (error) {
+                    if (!(error instanceof AbortError)) {
+                        throw error
+                    }
+                }
+
+                if (persist === false || abort?.signal.aborted) {
+                    return
+                }
+
+                const attempt = ++attempts
+                const delay = backoff(attempt)
+
+                console.error(
+                    'NBD connection closed, reconnecting in %ss, attempt=%s',
+                    Math.round(delay) / 1000,
+                    attempt,
+                )
+
+                await sleep(delay, abort)
+            }
+        } finally {
+            await this.device.close()
+        }
+    }
+
+    /** Open connections and attach the NBD device. */
+    private async attach() {
+        const { abort, device, options } = this
+
+        if (!device) {
+            throw new Error('NBD device missing')
+        }
+
+        const connectionsCount = options.connections ?? 1
+
+        if (connectionsCount < 1) {
+            throw new Error('NBD client needs at least 1 connection')
+        }
+
+        const connections: Connection[] = []
+        const teardown = () => {
+            abort?.signal.removeEventListener('abort', teardown)
+
+            for (const { socket } of connections) {
+                restoreSocket(socket).end()
+            }
+        }
+
+        setMaxListeners(connectionsCount, abort.signal)
+
+        try {
+            const results = await Promise.allSettled(
+                Array(connectionsCount)
+                    .fill(0)
+                    .map(async () => {
+                        connections.push(await this.connect())
+                    }),
+            )
+
+            for (const result of results) {
+                if (result.status === 'rejected') {
+                    throw result.reason
+                }
+            }
+
+            const { size, flags } = connections[0].export
+
+            for (const connection of connections) {
+                if (connection.export.size !== size) {
+                    throw new Error(
+                        `Invalid size for connection: ${connection.export.size}, expected: ${size}`,
+                    )
+                }
+
+                if (connection.export.flags !== flags) {
+                    throw new Error(
+                        `Invalid flags for connection: ${connection.export.flags}, expected: ${flags}`,
+                    )
+                }
+            }
+            abort?.signal.addEventListener('abort', teardown)
+
+            const { fd } = device
+            const blockSize = options.blockSize ?? 4096
+
             // Setup the NBD parameters for this block device
             await ioctl.batch(
                 [fd, NBD_SET_BLKSIZE, blockSize],
                 [fd, NBD_SET_SIZE_BLOCKS, size / BigInt(blockSize)],
                 [fd, NBD_SET_FLAGS, flags],
                 [fd, NBD_CLEAR_SOCK],
-                ...fds.map(
-                    (socket) =>
-                        [fd, NBD_SET_SOCK, socket] as [number, number, number],
+                ...connections.map(
+                    (connection) =>
+                        [fd, NBD_SET_SOCK, connection.fd] as [
+                            number,
+                            number,
+                            number,
+                        ],
                 ),
             )
+
+            if (abort?.signal.aborted) {
+                throw new AbortError()
+            }
+
+            options.connected?.()
 
             // Give ownership of the socket to the kernel and ask it to attach the NBD device
             await ioctl.blocking(fd, NBD_DO_IT)
         } finally {
-            try {
-                await device.close()
-            } finally {
-                abort?.signal.removeEventListener('abort', onAbort)
-
-                for (const socket of sockets) {
-                    restoreSocket(socket).destroy()
-                }
-            }
+            teardown()
         }
     }
 
     /** Open a connection to the NBD server. */
     private async connect() {
-        const {
-            abort,
-            socket: socketOptions,
-            export: exportName,
-        } = this.options
+        const { abort, options } = this
+        const { socket: socketOptions, export: exportName } = options
 
         if (abort?.signal.aborted) {
             throw new AbortError()
         }
 
         const socket = createConnection({ ...socketOptions, noDelay: true })
-        const handshake = new NbdHandshake(exportName)
+        const handshake = new Handshake(exportName)
         const onAbort = () => socket.destroy(new AbortError())
 
-        abort?.signal.addEventListener('abort', onAbort)
+        abort?.signal.addEventListener('abort', onAbort, { once: true })
 
-        return await new Promise<{ export: HandshakeExport; socket: Socket }>(
-            (resolve, reject) => {
-                const close = () => error(new Error('Connection closed'))
-                const teardown = () =>
-                    socket
-                        .off('data', receive)
-                        .off('error', reject)
-                        .off('close', close)
-                const error = (error: Error) => {
-                    teardown()
-                    reject(error)
-                }
-                const receive = (data: Buffer) => {
-                    const result = handshake.append(data)
-
-                    if (result.done) {
-                        teardown()
-                        resolve({ socket, export: result.export })
-                    } else if (result.send) {
-                        socket.write(result.send)
-                    }
-                }
-
+        return await new Promise<Connection>((resolve, reject) => {
+            const close = () => error(new Error('Connection closed'))
+            const teardown = () =>
                 socket
-                    .on('data', receive)
-                    .on('error', reject)
-                    .on('close', close)
-            },
-        )
+                    .off('data', receive)
+                    .off('error', reject)
+                    .off('close', close)
+            const error = (error: Error) => {
+                teardown()
+                reject(error)
+            }
+            const receive = (data: Buffer) => {
+                const result = handshake.append(data)
+
+                if (result.done) {
+                    teardown()
+                    resolve({
+                        socket,
+                        export: result.export,
+                        fd: captureSocket(socket),
+                    })
+                } else if (result.send) {
+                    socket.write(result.send)
+                }
+            }
+
+            socket.on('data', receive).on('error', reject).on('close', close)
+        })
             .catch((error) => {
                 socket.destroy(error)
 
@@ -188,17 +242,11 @@ class NbdClient {
     }
 }
 
-const NBD_SET_SOCK = 43776
-const NBD_SET_BLKSIZE = 43777
-const NBD_SET_SIZE = 43778
-const NBD_DO_IT = 43779
-const NBD_CLEAR_SOCK = 43780
-const NBD_CLEAR_QUE = 43781
-const NBD_PRINT_DEBUG = 43782
-const NBD_SET_SIZE_BLOCKS = 43783
-const NBD_DISCONNECT = 43784
-const NBD_SET_TIMEOUT = 43785
-const NBD_SET_FLAGS = 43786
+interface Connection {
+    fd: number
+    socket: Socket
+    export: HandshakeExport
+}
 
 class AbortError extends Error {
     constructor() {
@@ -266,8 +314,6 @@ function captureSocket(socket: Socket) {
 
     socket.pause()
     handle.readStop()
-    handle.readStop = () => {}
-    handle.readStart = () => {}
 
     anySocket._handle = null
     anySocket._nbd_client_handle = handle

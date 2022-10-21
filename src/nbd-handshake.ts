@@ -1,14 +1,17 @@
-const handshakeMagic = Buffer.from('NBDMAGIC', 'ascii')
-const optionMagic = Buffer.from('IHAVEOPT', 'ascii')
-const serverHandshake = Buffer.concat([handshakeMagic, optionMagic])
+import {
+    NBD_MAGIC_OPTION,
+    NBD_FLAG_NO_ZEROES,
+    NBD_OPT_EXPORT_NAME,
+    NBD_MAGIC_HANDSHAKE,
+} from './nbd-constants'
+
+const serverHandshake = Buffer.concat([NBD_MAGIC_HANDSHAKE, NBD_MAGIC_OPTION])
 const serverHandshakeLength = serverHandshake.length + 2
-
 const serverExportMetaLength = 8 + 2
-
-const NBD_OPT_EXPORT_NAME = 1
-const NBD_FLAG_NO_ZEROES = 1 << 1
-
-const magicExport = Buffer.concat([optionMagic, uint32Be(NBD_OPT_EXPORT_NAME)])
+const magicExport = Buffer.concat([
+    NBD_MAGIC_OPTION,
+    uint32Be(NBD_OPT_EXPORT_NAME),
+])
 const magicWithZeros = Buffer.concat([uint32Be(0), magicExport])
 const magicWithoutZeros = Buffer.concat([
     uint32Be(NBD_FLAG_NO_ZEROES),
@@ -24,7 +27,7 @@ export type HandshakeResult =
     | { done: true; export: HandshakeExport }
     | { done: false; send?: Buffer }
 
-export class NbdHandshake {
+export class Handshake {
     private buffer = Buffer.alloc(0)
     private serverFlags: null | number = null
     private metaLength = 0
