@@ -1,4 +1,13 @@
-FROM node:18 AS test
+FROM ubuntu:22.04 AS base
+
+RUN apt-get update && \
+    apt-get install -y curl build-essential
+
+FROM base AS test
+
+RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
+    apt-get install -y nodejs && \
+    npm install --global yarn
 
 RUN mkdir -p /app /mnt/test
 WORKDIR /app
@@ -14,7 +23,7 @@ RUN yarn build test
 
 CMD ["yarn", "jest", "--verbose"]
 
-FROM node:18 AS nbdkit
+FROM base AS nbdkit
 
 RUN curl https://download.libguestfs.org/nbdkit/1.32-stable/nbdkit-1.32.2.tar.gz | tar xvz && \
     mv /nbdkit-* /nbdkit && \

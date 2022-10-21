@@ -2,8 +2,6 @@ version: '3.8'
 services:
     test:
         privileged: true
-        volumes:
-            - /dev:/dev
         links:
             - nbdkit
         build:

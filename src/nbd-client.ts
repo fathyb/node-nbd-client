@@ -1,18 +1,11 @@
 import { ioctl } from 'async-ioctl'
+import { endianness } from 'os'
+import { setMaxListeners } from 'events'
 import { FileHandle, open } from 'fs/promises'
 import { NetConnectOpts, Socket, createConnection } from 'net'
 
 import { HandshakeExport, Handshake } from './nbd-handshake'
-import {
-    NBD_DO_IT,
-    NBD_SET_SOCK,
-    NBD_SET_FLAGS,
-    NBD_CLEAR_SOCK,
-    NBD_SET_BLKSIZE,
-    NBD_SET_SIZE_BLOCKS,
-    BLKGETSIZE64,
-} from './nbd-constants'
-import { setMaxListeners } from 'events'
+import { IOCTL_CODES } from './nbd-constants'
 
 export interface NBDOptions {
     socket: NetConnectOpts
@@ -30,19 +23,26 @@ export class NBD {
     private device: null | FileHandle = null
     private promise: null | Promise<void> = null
     private readonly abort = new AbortController()
+    private readonly endianness = endianness()
 
     constructor(private readonly options: NBDOptions) {}
 
+    /** Get the underlying block device size. */
     public async size() {
-        if (!this.device) {
+        const { device } = this
+
+        if (!device) {
             throw new Error('NBD client not started')
         }
 
         const buffer = Buffer.alloc(8)
 
-        await ioctl(this.device.fd, BLKGETSIZE64, buffer)
+        await this.handle(
+            async () =>
+                await ioctl(device.fd, IOCTL_CODES.BLKGETSIZE64, buffer),
+        )
 
-        return buffer.readBigUint64LE(0)
+        return buffer[`readBigUint64${this.endianness}`](0)
     }
 
     /** Stop the NBD client. */
@@ -72,7 +72,7 @@ export class NBD {
         try {
             while (true) {
                 try {
-                    await this.attach()
+                    await this.handle(async () => await this.attach())
                 } catch (error) {
                     if (!(error instanceof AbortError)) {
                         throw error
@@ -161,13 +161,13 @@ export class NBD {
 
             // Setup the NBD parameters for this block device
             await ioctl.batch(
-                [fd, NBD_SET_BLKSIZE, blockSize],
-                [fd, NBD_SET_SIZE_BLOCKS, size / BigInt(blockSize)],
-                [fd, NBD_SET_FLAGS, flags],
-                [fd, NBD_CLEAR_SOCK],
+                [fd, IOCTL_CODES.NBD_SET_BLKSIZE, blockSize],
+                [fd, IOCTL_CODES.NBD_SET_SIZE_BLOCKS, size / BigInt(blockSize)],
+                [fd, IOCTL_CODES.NBD_SET_FLAGS, flags],
+                [fd, IOCTL_CODES.NBD_CLEAR_SOCK],
                 ...connections.map(
                     (connection) =>
-                        [fd, NBD_SET_SOCK, connection.fd] as [
+                        [fd, IOCTL_CODES.NBD_SET_SOCK, connection.fd] as [
                             number,
                             number,
                             number,
@@ -182,7 +182,7 @@ export class NBD {
             options.connected?.()
 
             // Give ownership of the socket to the kernel and ask it to attach the NBD device
-            await ioctl.blocking(fd, NBD_DO_IT)
+            await ioctl.blocking(fd, IOCTL_CODES.NBD_DO_IT)
         } finally {
             teardown()
         }
@@ -204,13 +204,14 @@ export class NBD {
         abort?.signal.addEventListener('abort', onAbort, { once: true })
 
         return await new Promise<Connection>((resolve, reject) => {
-            const close = () => error(new Error('Connection closed'))
+            const close = () =>
+                fail(new Error('Connection closed during negotiation'))
             const teardown = () =>
                 socket
                     .off('data', receive)
-                    .off('error', reject)
+                    .off('error', fail)
                     .off('close', close)
-            const error = (error: Error) => {
+            const fail = (error: Error) => {
                 teardown()
                 reject(error)
             }
@@ -229,7 +230,7 @@ export class NBD {
                 }
             }
 
-            socket.on('data', receive).on('error', reject).on('close', close)
+            socket.on('data', receive).on('error', fail).on('close', close)
         })
             .catch((error) => {
                 socket.destroy(error)
@@ -239,6 +240,24 @@ export class NBD {
             .finally(() => {
                 abort?.signal.removeEventListener('abort', onAbort)
             })
+    }
+
+    private async handle<T>(run: () => Promise<T>) {
+        try {
+            return await run()
+        } catch (error) {
+            if (error instanceof ioctl.Error) {
+                const name = ioctlNames.get(error.request)
+
+                if (name) {
+                    throw new Error(
+                        `Error ${error.code} running ${name} ioctl on NBD device`,
+                    )
+                }
+            }
+
+            throw error
+        }
     }
 }
 
@@ -284,6 +303,10 @@ function backoff(attempt: number, delay = 250) {
 function randomNumberBetween(start: number, end: number) {
     return start + Math.random() * (end - start)
 }
+
+const ioctlNames = new Map(
+    Object.entries(IOCTL_CODES).map(([name, value]) => [BigInt(value), name]),
+)
 
 function restoreSocket(socket: Socket) {
     const anySocket = socket as any
