@@ -1,5 +1,5 @@
 import { join } from 'path'
-import { spawnSync } from 'child_process'
+import { spawn } from 'child_process'
 import { randomBytes } from 'crypto'
 import { readFile, stat, writeFile } from 'fs/promises'
 
@@ -55,18 +55,24 @@ for (const connections of connectionCounts) {
             connected.mockImplementation(() => options.connected?.(nbd))
             attached.mockImplementation(() =>
                 Promise.resolve()
-                    .then(async () => {
-                        expect(await NBD.check(device)).toBe(true)
-                        expect(await nbd.size()).toBe(
-                            BigInt(1024 * 1024 * 1024),
-                        )
-
-                        spawnSync('mount', [device, mountPoint])
-
-                        await options.attached?.(nbd)
-                    })
+                    .then(
+                        async () =>
+                            await Promise.all([
+                                exec('mount', device, mountPoint).then(() =>
+                                    options.attached?.(nbd),
+                                ),
+                                Promise.resolve().then(async () =>
+                                    expect(await NBD.check(device)).toBe(true),
+                                ),
+                                Promise.resolve().then(async () =>
+                                    expect(await nbd.size()).toBe(
+                                        BigInt(1024 * 1024 * 1024),
+                                    ),
+                                ),
+                            ]),
+                    )
                     .catch(reject)
-                    .finally(() => spawnSync('umount', [device]))
+                    .finally(async () => await exec('umount', device))
                     .finally(() => nbd.stop()),
             )
 
@@ -89,6 +95,24 @@ for (const connections of connectionCounts) {
             expect(attached).toHaveBeenCalledTimes(1)
         })
     }
+}
+
+async function exec(command: string, ...args: string[]) {
+    return new Promise<void>((resolve, reject) => {
+        const child = spawn(command, args)
+
+        child.on('error', reject).on('close', (code, signal) => {
+            if (signal) {
+                reject(
+                    new Error(`Process ${command} quit with signal ${signal}`),
+                )
+            } else if (code !== 0) {
+                reject(new Error(`Process ${command} quit with code ${code}`))
+            } else {
+                resolve()
+            }
+        })
+    })
 }
 
 async function fileExists(path: string) {

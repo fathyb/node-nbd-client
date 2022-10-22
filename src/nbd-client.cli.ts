@@ -2,96 +2,118 @@ import { program } from 'commander'
 
 import { NBD } from './nbd-client'
 
-program
-    .name('node-nbd-client')
-    .argument(
-        '<device>',
-        'The block special file (/dev entry) which this nbd-client should connect to, specified as a full path.',
-    )
-    .option(
-        '-H, --host <host>',
-        'The hostname or IP address of the machine running nbd-server.',
-    )
-    .option(
-        '-P, --port <port>',
-        'The TCP port on which nbd-server is running at the server. The port number defaults to 10809, the IANA-assigned port number for the NBD protocol.',
-    )
-    .option(
-        '-b, --block-size <size>',
-        'Use a blocksize of "block size". Default is 1024; allowed values are either 512, 1024, 2048 or 4096.',
-    )
-    .option(
-        '-C, --connections <number>',
-        'Use num connections to the server, to allow speeding up request handling, at the cost of higher resource usage on the server. Use of this option requires kernel support available first with Linux 4.9.',
-    )
-    .option(
-        '-p, --persist',
-        'When this option is specified, nbd-client will immediately try to reconnect an nbd device if the connection ever drops unexpectedly due to a lost server or something similar.',
-    )
-    .option(
-        '-N, --name <name>',
-        'Specifies the name of the export that we want to use. If not specified, nbd-client will ask for a "default" export, if one exists on the server.',
-    )
-    .option(
-        '-u, --unix <path>',
-        'Connect to the server over a unix domain socket at path, rather than to a server over a TCP socket. The server must be listening on the given socket.',
-    )
-    .action(
-        async (
-            host,
-            port,
-            device,
-            { name, unix, persist, blockSize, connections },
-        ) => {
-            const nbd = new NBD({
-                name,
+export function NBDCli() {
+    return program
+        .name('node-nbd-client')
+        .showHelpAfterError()
+        .showSuggestionAfterError()
+        .argument(
+            '<device>',
+            'Full path to the block device the client should use, example: /dev/nbd5.',
+        )
+        .option(
+            '-H, --host <host>',
+            'Server hostname or IP address, defaults to localhost.',
+        )
+        .option(
+            '-P, --port <port>',
+            'Server port, defaults to 10809, the IANA-assigned port number for the NBD protocol.',
+        )
+        .option(
+            '-u, --unix <path>',
+            'UNIX domain socket path, overrides TCP options.',
+        )
+        .option(
+            '-b, --block-size <size>',
+            'Block-size in bytes, defaults to 1024; allowed values are either 512, 1024, 2048 or 4096.',
+        )
+        .option(
+            '-C, --connections <number>',
+            'Number of connections to the server, increasing throughput and reducing latency at the cost of higher resource usage. Requires Linux 4.9+.',
+        )
+        .option('-N, --name <name>', 'Export name, defaults to `default`.')
+        .option(
+            '-p, --persist',
+            'Configure if the client should always reconnect if the connection is unexpectedly dropped.',
+        )
+        .option(
+            '-c, --check',
+            'Configure if the client should quit with an exit code of 0 if the NBD device is attached or 1 if the NBD device is not attached.',
+        )
+        .action(
+            async (
                 device,
-                persist,
-                blockSize,
-                connections,
-                socket: unix
-                    ? { path: unix }
-                    : { host, port: parseInt(port, 10) },
-
-                connected() {
-                    console.log('Connected, attaching..')
+                {
+                    host,
+                    port,
+                    unix,
+                    name,
+                    check,
+                    persist,
+                    blockSize,
+                    connections,
                 },
-                attached() {
-                    console.log('Attached')
-                },
-            })
+            ) => {
+                if (check) {
+                    try {
+                        if (await NBD.check(device)) {
+                            process.exitCode = 0
+                        } else {
+                            process.exitCode = 1
+                        }
+                    } catch (error) {
+                        console.error(error)
 
-            for (const signal of ['SIGINT', 'SIGTERM']) {
-                let signals = 0
-
-                process.on(signal, () => {
-                    signals++
-                    nbd.stop()
-
-                    if (signals === 1) {
-                        console.log('Closing client..')
-                    } else if (signals === 2) {
-                        console.log(
-                            'Received second termination signal, will force quit on thrid',
-                        )
-                    } else {
-                        console.log(
-                            'Force quitting after third termination signal',
-                        )
-
-                        process.exit(1)
+                        process.exitCode = 2
                     }
+
+                    return
+                }
+
+                const nbd = new NBD({
+                    name,
+                    device,
+                    persist,
+                    blockSize,
+                    connections,
+                    socket: unix
+                        ? { path: unix }
+                        : { host, port: parseInt(port, 10) },
+
+                    connected() {
+                        console.log('Connected, attaching..')
+                    },
+                    attached() {
+                        console.log('Attached')
+                    },
                 })
-            }
 
-            console.log('Connecting..')
+                for (const signal of ['SIGINT', 'SIGTERM']) {
+                    let signals = 0
 
-            await nbd.start()
-        },
-    )
-    .parseAsync()
-    .catch((error) => {
-        console.error(error)
+                    process.on(signal, () => {
+                        signals++
+                        nbd.stop()
 
-        process.exit(1)
-    })
+                        if (signals === 1) {
+                            console.log('Closing client..')
+                        } else if (signals === 2) {
+                            console.log(
+                                'Received second termination signal, will force quit on thrid',
+                            )
+                        } else {
+                            console.log(
+                                'Force quitting after third termination signal',
+                            )
+
+                            process.exit(1)
+                        }
+                    })
+                }
+
+                console.log('Connecting..')
+
+                await nbd.start()
+            },
+        )
+}
