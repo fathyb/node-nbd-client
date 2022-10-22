@@ -14,18 +14,60 @@ Linux NBD client and library for Node.js. Built to automate block storage system
 
 ### CLI
 
+> Install using `npm install --global nbd-client`. Binary is called `node-nbd-client` to prevent conflicting with `nbd-client`.
+
 ```console
-$ node-nbd-client --unix nbd-socket.sock --name my-disk --connections 4
+$ node-nbd-client --help
+Usage: node-nbd-client [options] <device>
 ```
 
+#### **`<device>`**
+
+> The block special file (/dev entry) which this nbd-client should connect to, specified as a full path.
+
+#### **`-H, --host <host>`**
+
+> The hostname or IP address of the machine running nbd-server.
+
+#### **`-P, --port <port>`**
+
+> The TCP port on which nbd-server is running at the server. The port number defaults to 10809, the IANA-assigned port number for the NBD protocol.
+
+#### **`-b, --block-size <size>`**
+
+> Use a blocksize of "block size". Default is 1024; allowed values are either 512, 1024, 2048 or 4096.
+
+#### **`-C, --connections <number>`**
+
+> Use num connections to the server, to allow speeding up request handling, at the cost of higher resource usage on the server. Use of this option requires kernel support available first with Linux 4.9.
+
+#### **`-p, --persist`**
+
+> When this option is specified, nbd-client will immediately try to reconnect an nbd device if the connection ever drops unexpectedly due to a lost server or something similar.
+
+#### **`-N, --name <name>`**
+
+> Specifies the name of the export that we want to use. If not specified, nbd-client will ask for a "default" export, if one exists on the server.
+
+#### **`-u, --unix <path>`**
+
+> Connect to the server over a unix domain socket at path, rather than to a server over a TCP socket. The server must be listening on the given socket.
+
+#### **`-h, --help`**
+
+> Display help.
+
 ### Library
+
+> Install using `npm install nbd-client`
 
 ```js
 import { NBD } from 'nbd-client'
 
 const client = new NBD({
+    name: 'my-disk', // same as nbd-client --name
+    device: '/dev/nbd0',
     socket: { path: 'nbd-server.sock' }, // same options as net.createConnection()
-    export: 'my-disk', // same as nbd-client --name
     persist: true, // same as nbd-client --persist
     connections: 4, // same as nbd-client --connections
 

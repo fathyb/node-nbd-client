@@ -4,6 +4,9 @@
     "license": "MIT",
     "main": "build/nbd-client.js",
     "types": "build/nbd-client.d.ts",
+    "bin": {
+        "node-nbd-client": "src"
+    },
     "files": [
         "build/",
         "src/"
@@ -13,7 +16,8 @@
         "test": "docker-compose -f test/docker-compose.yaml up --build test"
     },
     "dependencies": {
-        "async-ioctl": "^1.0.4"
+        "async-ioctl": "^1.0.4",
+        "commander": "^9.4.1"
     },
     "devDependencies": {
         "@types/jest": "^29.2.0",
