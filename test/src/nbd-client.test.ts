@@ -16,47 +16,52 @@ for (const connections of connectionCounts) {
     describe(`${connections} connections`, () => {
         const testContent = randomBytes(1024 * 1024).toString('hex')
 
+        test('export not found', async () => {
+            await expect(() =>
+                testHarness({ name: 'doesnt exist' }),
+            ).rejects.toThrow('Export not found')
+        })
+
         test('write and read file', async () => {
-            await testHarness(
-                async () => await writeFile(testFile, testContent),
-            )
+            expect(await fileExists(testFile)).toBe(false)
+
+            await testHarness({
+                async connected() {
+                    await writeFile(testFile, testContent)
+                },
+            })
 
             expect(await fileExists(testFile)).toBe(false)
 
-            await testHarness(async () => {
-                expect(await readFile(testFile, 'utf-8')).toBe(testContent)
+            await testHarness({
+                async connected() {
+                    expect(await readFile(testFile, 'utf-8')).toBe(testContent)
+                },
             })
         })
     })
 
-    async function testHarness(connected: (nbd: NBD) => void | Promise<void>) {
-        const callback = jest.fn()
+    async function testHarness(
+        options: {
+            name?: string
+            attached?(nbd: NBD): void | Promise<void>
+            connected?(nbd: NBD): void | Promise<void>
+        } = {},
+    ) {
+        const attached = jest.fn()
+        const connected = jest.fn()
 
         return new Promise<void>((resolve, reject) => {
-            callback.mockImplementation(() => {
+            attached.mockImplementation(() => {
                 Promise.resolve()
                     .then(async () => {
-                        const expectedSize = BigInt(1024 * 1024 * 1024)
-
-                        for (let i = 0; i < 1000; i++) {
-                            const size = await nbd.size()
-
-                            if (size === 0n) {
-                                await new Promise<void>((resolve) =>
-                                    setTimeout(resolve, 10),
-                                )
-                            } else if (size === expectedSize) {
-                                break
-                            } else {
-                                throw new Error(
-                                    `Unexpected block device size: ${size}, expected: ${expectedSize}`,
-                                )
-                            }
-                        }
+                        expect(await nbd.size()).toBe(
+                            BigInt(1024 * 1024 * 1024),
+                        )
 
                         spawnSync('mount', [device, mountPoint])
 
-                        await connected(nbd)
+                        await options.attached?.(nbd)
                     })
                     .catch(reject)
                     .finally(() => spawnSync('umount', [device]))
@@ -64,15 +69,17 @@ for (const connections of connectionCounts) {
             })
             const nbd = new NBD({
                 device,
+                attached,
+                connected,
                 connections,
-                export: 'test-disk.img',
+                name: options.name ?? 'test-disk.img',
                 socket: { host: 'nbdkit', port: 8000 },
-                connected: callback,
             })
 
             nbd.start().then(resolve, reject)
         }).then(() => {
-            expect(callback).toHaveBeenCalledTimes(1)
+            expect(connected).toHaveBeenCalledTimes(1)
+            expect(attached).toHaveBeenCalledTimes(1)
         })
     }
 }
