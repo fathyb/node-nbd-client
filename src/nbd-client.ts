@@ -21,12 +21,14 @@ export interface NBDOptions {
 }
 
 export class NBD {
+    /** Return `true` if a device is attached, `false` otherwise. */
     public static async check(device: string) {
         const pid = await this.pid(device)
 
         return pid !== null
     }
 
+    /** Return the pid associated to a device, or `null` if the device is not attached.  */
     public static async pid(device: string) {
         const name = device.replace(/^\/dev\//, '')
         const pid = await readFile(`/sys/block/${name}/pid`, 'utf-8').catch(
