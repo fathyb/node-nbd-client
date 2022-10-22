@@ -318,14 +318,12 @@ export class NBD {
                 const name = ioctlNames.get(error.request)
 
                 if (name) {
-                    const errorName = errorNames.get(error.code)
-                    const errorDesc = errorName ? ` (${errorName})` : ''
+                    const desc =
+                        typeof error.code === 'number'
+                            ? error.code
+                            : `${error.code} (${error.errno})`
 
-                    error.message = `Error ${
-                        error.code + errorDesc
-                    } running ${name} ioctl on NBD device ${
-                        this.options.device
-                    }`
+                    error.message = `Error running ${name} ioctl on NBD device ${this.options.device}: ${desc}`
                 }
             }
 
@@ -378,9 +376,6 @@ function randomNumberBetween(start: number, end: number) {
     return start + Math.random() * (end - start)
 }
 
-const errorNames = new Map(
-    Object.entries(constants.errno).map(([name, value]) => [value, name]),
-)
 const ioctlNames = new Map(
     Object.entries(IOCTL_CODES).map(([name, value]) => [BigInt(value), name]),
 )
