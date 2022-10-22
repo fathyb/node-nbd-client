@@ -1,7 +1,7 @@
 {
     "name": "nbd-client",
     "version": "1.0.5",
-    "license": "MIT",
+    "license": "GPL-3.0",
     "main": "build/index.js",
     "types": "build/index.d.ts",
     "bin": {
