@@ -54,7 +54,10 @@ program
                     : { host, port: parseInt(port, 10) },
 
                 connected() {
-                    console.log('Connected')
+                    console.log('Connected, attaching..')
+                },
+                attached() {
+                    console.log('Attached')
                 },
             })
 

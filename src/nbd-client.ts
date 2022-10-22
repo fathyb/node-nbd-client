@@ -203,8 +203,16 @@ export class NBD {
                         if (blockDeviceSize === 0n) {
                             const duration = Date.now() - start
 
-                            // Poll every 10ms the first second and every 500ms after that
-                            await sleep(duration < 1000 ? 50 : 500)
+                            await sleep(
+                                // Variable poll timing for best results
+                                duration < 25
+                                    ? 1 // poll every ms the first 25ms
+                                    : duration < 500
+                                    ? 10 // poll every 10ms the first 500ms
+                                    : duration < 1000
+                                    ? 50 // poll every 50ms the first 1s
+                                    : 500, // poll every 500ms after that
+                            )
                         } else if (blockDeviceSize === size) {
                             return await options.attached?.()
                         } else {

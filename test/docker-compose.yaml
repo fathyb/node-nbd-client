@@ -5,7 +5,6 @@ services:
         links:
             - nbdkit
         build:
-            target: test
             context: ..
             dockerfile: test/Dockerfile
     nbdkit:

@@ -1,57 +1,56 @@
 # node-nbd-client
 
-Linux NBD client and library for Node.js. Built to automate block storage systems using container runtimes like Docker.
+Linux NBD client and library for Node.js. Built to automate block storage systems.
 
 ## Features
 
--   Parallel negotiations: `node-nbd-client` opens connections in parallel. `nbd-client` opens them serially.
+-   Fast: `node-nbd-client` can attach an NBD device in ~10ms and does all I/O in parallel. `nbd-client` does all I/O serially. Transmission is handled by the kernel so it performs exactly the same.
 -   Persistent connections: will always reconnect, even if `nbd-client -disconnect` is used. `nbd-client` will stop if the server crashes, even with `-persist`.
 -   Built for containers:
     -   `ioctl` interface by default. `nbd-client` defaults to the `netlink` interface which requires `--network=host` on Docker.
-    -   `SIGKILL` will disconnect the NBD block device. `nbd-client` will dead-lock a privileged container on `SIGKILL`, requiring a machine restart.
+    -   `node-nbd-client` uses threads and never calls `fork()`, which keep sockets in the calling PID. `nbd-client` will fork even with `-nofork` (it is intended per the man page), causing a kernel deadlock if `SIGKILL` is sent to a container: main process waits for file descriptors to close, which cannot close because the forked process is opened, but the forked process won't quit until the Docker init process quits, which is blocked by the main process, making Docker show a zoombie process error, requiring a machine restart to unlock resources.
 
 ## Usage
 
 ### CLI
 
-> Install using `npm install --global nbd-client`. Binary is called `node-nbd-client` to prevent conflicting with `nbd-client`.
-
 ```console
+$ npm install nbd-client --global
 $ node-nbd-client --help
 Usage: node-nbd-client [options] <device>
 ```
 
 #### **`<device>`**
 
-> The block special file (/dev entry) which this nbd-client should connect to, specified as a full path.
+> Full path to the block device the client should use. Example: `/dev/nbd5`.
 
 #### **`-H, --host <host>`**
 
-> The hostname or IP address of the machine running nbd-server.
+> Configure server hostname or IP address, defaults to `localhost`.
 
 #### **`-P, --port <port>`**
 
-> The TCP port on which nbd-server is running at the server. The port number defaults to 10809, the IANA-assigned port number for the NBD protocol.
-
-#### **`-b, --block-size <size>`**
-
-> Use a blocksize of "block size". Default is 1024; allowed values are either 512, 1024, 2048 or 4096.
-
-#### **`-C, --connections <number>`**
-
-> Use num connections to the server, to allow speeding up request handling, at the cost of higher resource usage on the server. Use of this option requires kernel support available first with Linux 4.9.
-
-#### **`-p, --persist`**
-
-> When this option is specified, nbd-client will immediately try to reconnect an nbd device if the connection ever drops unexpectedly due to a lost server or something similar.
-
-#### **`-N, --name <name>`**
-
-> Specifies the name of the export that we want to use. If not specified, nbd-client will ask for a "default" export, if one exists on the server.
+> Configure server port, defaults to `10809`, the IANA-assigned port number for the NBD protocol.
 
 #### **`-u, --unix <path>`**
 
-> Connect to the server over a unix domain socket at path, rather than to a server over a TCP socket. The server must be listening on the given socket.
+> Configure UNIX domain socket to use.
+
+#### **`-b, --block-size <size>`**
+
+> Configure block-size, defaults to `1024`; allowed values are either `512`, `1024`, `2048` or `4096`.
+
+#### **`-C, --connections <number>`**
+
+> Configure number of connections to the server, increasing throughput and reducing latency at the cost of higher resource usage. Requires Linux 4.9+.
+
+#### **`-p, --persist`**
+
+> Configure if the client should always reconnect if the connection is unexpectedly dropped.
+
+#### **`-N, --name <name>`**
+
+> Configure the export name, defaults to `default`.
 
 #### **`-h, --help`**
 
@@ -87,10 +86,5 @@ await client.start()
 
 ## Not implemented
 
--   Netlink interface
+-   `netlink` interface
 -   Old-style negotiation
-
-## Performance
-
-Transmission should be exactly the same as `nbd-client`: both use the NBD driver to offload transmission to the kernel.
-Negociation should be faster on `node-nbd-client`.

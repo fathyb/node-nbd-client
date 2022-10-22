@@ -8,17 +8,15 @@ import { NBD } from '../..'
 const device = '/dev/nbd0'
 const mountPoint = '/mnt/test'
 const testFile = join(mountPoint, 'test-file')
-const connectionCounts = Array(16)
-    .fill(0)
-    .map((_, i) => i + 1)
+const connectionCounts = [0, 1, 2, 4, 8, 16]
 
 for (const connections of connectionCounts) {
     describe(`${connections} connections`, () => {
         const testContent = randomBytes(1024 * 1024).toString('hex')
 
         test('export not found', async () => {
-            await expect(() =>
-                testHarness({ name: 'doesnt exist' }),
+            await expect(
+                async () => await testHarness({ name: 'doesnt exist' }),
             ).rejects.toThrow('Export not found')
         })
 
@@ -26,7 +24,7 @@ for (const connections of connectionCounts) {
             expect(await fileExists(testFile)).toBe(false)
 
             await testHarness({
-                async connected() {
+                async attached() {
                     await writeFile(testFile, testContent)
                 },
             })
@@ -34,7 +32,7 @@ for (const connections of connectionCounts) {
             expect(await fileExists(testFile)).toBe(false)
 
             await testHarness({
-                async connected() {
+                async attached() {
                     expect(await readFile(testFile, 'utf-8')).toBe(testContent)
                 },
             })
@@ -52,7 +50,8 @@ for (const connections of connectionCounts) {
         const connected = jest.fn()
 
         return new Promise<void>((resolve, reject) => {
-            attached.mockImplementation(() => {
+            connected.mockImplementation(() => options.connected?.(nbd))
+            attached.mockImplementation(() =>
                 Promise.resolve()
                     .then(async () => {
                         expect(await nbd.size()).toBe(
@@ -65,8 +64,9 @@ for (const connections of connectionCounts) {
                     })
                     .catch(reject)
                     .finally(() => spawnSync('umount', [device]))
-                    .finally(() => nbd.stop())
-            })
+                    .finally(() => nbd.stop()),
+            )
+
             const nbd = new NBD({
                 device,
                 attached,
@@ -88,7 +88,9 @@ async function fileExists(path: string) {
     try {
         const file = await stat(path)
 
-        return file.isFile()
+        expect(file.isFile()).toBe(true)
+
+        return true
     } catch (error: any) {
         if (error?.code === 'ENOENT') {
             return false
