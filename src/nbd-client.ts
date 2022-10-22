@@ -1,7 +1,7 @@
+import { cpus } from 'os'
 import { ioctl } from 'async-ioctl'
 import { setMaxListeners } from 'events'
 import { FileHandle, open, readFile } from 'fs/promises'
-import { constants, cpus, endianness } from 'os'
 import { NetConnectOpts, Socket, createConnection } from 'net'
 
 import { IOCTL_CODES } from './nbd-constants'
@@ -45,8 +45,6 @@ export class NBD {
     private device: null | FileHandle = null
     private promise: null | Promise<void> = null
     private readonly abort = new AbortController()
-    private readonly endianness = endianness()
-    private readonly sizeBuffer = Buffer.alloc(8)
 
     constructor(private readonly options: NBDOptions) {}
 
@@ -68,18 +66,20 @@ export class NBD {
 
     /** Get the underlying block device size. */
     public async size() {
-        const { device, sizeBuffer } = this
+        const { device } = this
 
         if (!device) {
             throw new Error('NBD client not started')
         }
 
+        const buffer = new BigUint64Array(1)
+
         await this.handle(
             async () =>
-                await ioctl(device.fd, IOCTL_CODES.BLKGETSIZE64, sizeBuffer),
+                await ioctl(device.fd, IOCTL_CODES.BLKGETSIZE64, buffer),
         )
 
-        return sizeBuffer[`readBigUint64${this.endianness}`](0)
+        return buffer[0]
     }
 
     /** Reconnection loop. */

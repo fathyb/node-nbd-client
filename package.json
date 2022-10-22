@@ -16,7 +16,7 @@
         "test": "docker-compose -f test/docker-compose.yaml up --build test"
     },
     "dependencies": {
-        "async-ioctl": "^1.0.5",
+        "async-ioctl": "^1.0.6",
         "commander": "^9.4.1"
     },
     "devDependencies": {
