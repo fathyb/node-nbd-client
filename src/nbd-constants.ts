@@ -1,3 +1,8 @@
+export const NBD_MAGIC_OPTION = Buffer.from('IHAVEOPT', 'ascii')
+export const NBD_MAGIC_HANDSHAKE = Buffer.from('NBDMAGIC', 'ascii')
+export const NBD_FLAG_NO_ZEROES = 1 << 1
+export const NBD_OPT_EXPORT_NAME = 1
+
 export const IOCTL_CODES = {
     BLKGETSIZE64: 0x80081272,
     NBD_SET_SOCK: 0xab00,
@@ -12,8 +17,3 @@ export const IOCTL_CODES = {
     NBD_SET_TIMEOUT: 0xab09,
     NBD_SET_FLAGS: 0xab0a,
 }
-
-export const NBD_FLAG_NO_ZEROES = 1 << 1
-export const NBD_OPT_EXPORT_NAME = 1
-export const NBD_MAGIC_HANDSHAKE = Buffer.from('NBDMAGIC', 'ascii')
-export const NBD_MAGIC_OPTION = Buffer.from('IHAVEOPT', 'ascii')

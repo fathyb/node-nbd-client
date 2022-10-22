@@ -1,22 +1,23 @@
 import { ioctl } from 'async-ioctl'
 import { setMaxListeners } from 'events'
-import { cpus, endianness } from 'os'
 import { FileHandle, open } from 'fs/promises'
+import { constants, cpus, endianness } from 'os'
 import { NetConnectOpts, Socket, createConnection } from 'net'
 
 import { IOCTL_CODES } from './nbd-constants'
 import { HandshakeExport, Handshake } from './nbd-handshake'
 
 export interface NBDOptions {
-    socket: NetConnectOpts
     device: string
-    export: string
 
+    name?: string
+    socket?: NetConnectOpts
     persist?: boolean
     blockSize?: number
     connections?: number
 
-    connected?(): void
+    attached?(): void | Promise<void>
+    connected?(): void | Promise<void>
 }
 
 export class NBD {
@@ -24,26 +25,9 @@ export class NBD {
     private promise: null | Promise<void> = null
     private readonly abort = new AbortController()
     private readonly endianness = endianness()
+    private readonly sizeBuffer = Buffer.alloc(8)
 
     constructor(private readonly options: NBDOptions) {}
-
-    /** Get the underlying block device size. */
-    public async size() {
-        const { device } = this
-
-        if (!device) {
-            throw new Error('NBD client not started')
-        }
-
-        const buffer = Buffer.alloc(8)
-
-        await this.handle(
-            async () =>
-                await ioctl(device.fd, IOCTL_CODES.BLKGETSIZE64, buffer),
-        )
-
-        return buffer[`readBigUint64${this.endianness}`](0)
-    }
 
     /** Stop the NBD client. */
     public stop() {
@@ -61,11 +45,26 @@ export class NBD {
         return await this.promise
     }
 
+    /** Get the underlying block device size. */
+    public async size() {
+        const { device, sizeBuffer } = this
+
+        if (!device) {
+            throw new Error('NBD client not started')
+        }
+
+        await this.handle(
+            async () =>
+                await ioctl(device.fd, IOCTL_CODES.BLKGETSIZE64, sizeBuffer),
+        )
+
+        return sizeBuffer[`readBigUint64${this.endianness}`](0)
+    }
+
     /** Reconnection loop. */
     private async run() {
         let attempts = 0
         const { abort, options } = this
-        const { persist } = options
 
         this.device = await open(options.device, 'r+')
 
@@ -79,7 +78,7 @@ export class NBD {
                     }
                 }
 
-                if (persist === false || abort?.signal.aborted) {
+                if (!options.persist || abort?.signal.aborted) {
                     return
                 }
 
@@ -137,7 +136,11 @@ export class NBD {
                 }
             }
 
-            const { size, flags } = connections[0].export
+            const [
+                {
+                    export: { size, flags },
+                },
+            ] = connections
 
             for (const connection of connections) {
                 if (connection.export.size !== size) {
@@ -152,10 +155,11 @@ export class NBD {
                     )
                 }
             }
+
             abort?.signal.addEventListener('abort', teardown)
 
             const { fd } = device
-            const blockSize = options.blockSize ?? 4096
+            const blockSize = options.blockSize ?? 1024
 
             // Setup the NBD parameters for this block device
             await ioctl.batch(
@@ -177,10 +181,40 @@ export class NBD {
                 throw new AbortError()
             }
 
-            options.connected?.()
+            await options.connected?.()
 
-            // Give ownership of the socket to the kernel and ask it to attach the NBD device
-            await ioctl.blocking(fd, IOCTL_CODES.NBD_DO_IT)
+            if (abort?.signal.aborted) {
+                throw new AbortError()
+            }
+
+            let running = true
+
+            await Promise.all([
+                // Give ownership of the sockets to the kernel and attach the NBD device
+                ioctl.blocking(fd, IOCTL_CODES.NBD_DO_IT).finally(() => {
+                    running = false
+                }),
+                Promise.resolve().then(async () => {
+                    const start = Date.now()
+
+                    while (running) {
+                        const blockDeviceSize = await this.size()
+
+                        if (blockDeviceSize === 0n) {
+                            const duration = Date.now() - start
+
+                            // Poll every 10ms the first second and every 500ms after that
+                            await sleep(duration < 1000 ? 50 : 500)
+                        } else if (blockDeviceSize === size) {
+                            return await options.attached?.()
+                        } else {
+                            throw new Error(
+                                `NBD size mismatch on ${options.device}: expected=${size}, actual=${blockDeviceSize}`,
+                            )
+                        }
+                    }
+                }),
+            ])
         } finally {
             teardown()
         }
@@ -189,21 +223,28 @@ export class NBD {
     /** Open a connection to the NBD server. */
     private async connect() {
         const { abort, options } = this
-        const { socket: socketOptions, export: exportName } = options
+        const { socket: socketOptions, name } = options
 
         if (abort?.signal.aborted) {
             throw new AbortError()
         }
 
-        const socket = createConnection({ ...socketOptions, noDelay: true })
-        const handshake = new Handshake(exportName)
+        const socket = createConnection({
+            ...(socketOptions ?? { port: 10809 }),
+            noDelay: true,
+        })
         const onAbort = () => socket.destroy(new AbortError())
+        const handshake = new Handshake(name ?? 'default')
 
         abort?.signal.addEventListener('abort', onAbort, { once: true })
 
         return await new Promise<Connection>((resolve, reject) => {
             const close = () =>
-                fail(new Error('Connection closed during negotiation'))
+                fail(
+                    handshake.close()
+                        ? new Error('Export not found')
+                        : new Error('Connection closed during negotiation'),
+                )
             const teardown = () =>
                 socket
                     .off('data', receive)
@@ -248,7 +289,14 @@ export class NBD {
                 const name = ioctlNames.get(error.request)
 
                 if (name) {
-                    error.message = `Error ${error.code} running ${name} ioctl on NBD device ${this.options.device}`
+                    const errorName = errorNames.get(error.code)
+                    const errorDesc = errorName ? ` (${errorName})` : ''
+
+                    error.message = `Error ${
+                        error.code + errorDesc
+                    } running ${name} ioctl on NBD device ${
+                        this.options.device
+                    }`
                 }
             }
 
@@ -263,6 +311,7 @@ interface Connection {
     export: HandshakeExport
 }
 
+/** Thrown when the user aborts. Caught and silenced by the library. */
 class AbortError extends Error {
     constructor() {
         super('Aborted')
@@ -300,6 +349,9 @@ function randomNumberBetween(start: number, end: number) {
     return start + Math.random() * (end - start)
 }
 
+const errorNames = new Map(
+    Object.entries(constants.errno).map(([name, value]) => [value, name]),
+)
 const ioctlNames = new Map(
     Object.entries(IOCTL_CODES).map(([name, value]) => [BigInt(value), name]),
 )
