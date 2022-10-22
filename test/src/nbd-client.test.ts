@@ -49,11 +49,14 @@ for (const connections of connectionCounts) {
         const attached = jest.fn()
         const connected = jest.fn()
 
+        expect(await NBD.check(device)).toBe(false)
+
         return new Promise<void>((resolve, reject) => {
             connected.mockImplementation(() => options.connected?.(nbd))
             attached.mockImplementation(() =>
                 Promise.resolve()
                     .then(async () => {
+                        expect(await NBD.check(device)).toBe(true)
                         expect(await nbd.size()).toBe(
                             BigInt(1024 * 1024 * 1024),
                         )
@@ -76,7 +79,11 @@ for (const connections of connectionCounts) {
                 socket: { host: 'nbdkit', port: 8000 },
             })
 
-            nbd.start().then(resolve, reject)
+            nbd.start()
+                .then(async () => {
+                    expect(await NBD.check(device)).toBe(false)
+                })
+                .then(resolve, reject)
         }).then(() => {
             expect(connected).toHaveBeenCalledTimes(1)
             expect(attached).toHaveBeenCalledTimes(1)

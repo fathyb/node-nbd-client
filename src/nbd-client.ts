@@ -1,6 +1,6 @@
 import { ioctl } from 'async-ioctl'
 import { setMaxListeners } from 'events'
-import { FileHandle, open } from 'fs/promises'
+import { FileHandle, open, readFile } from 'fs/promises'
 import { constants, cpus, endianness } from 'os'
 import { NetConnectOpts, Socket, createConnection } from 'net'
 
@@ -21,6 +21,27 @@ export interface NBDOptions {
 }
 
 export class NBD {
+    public static async check(device: string) {
+        const pid = await this.pid(device)
+
+        return pid !== null
+    }
+
+    public static async pid(device: string) {
+        const name = device.replace(/^\/dev\//, '')
+        const pid = await readFile(`/sys/block/${name}/pid`, 'utf-8').catch(
+            (error) => {
+                if (error?.code === 'ENOENT') {
+                    return null
+                } else {
+                    throw error
+                }
+            },
+        )
+
+        return pid ? parseInt(pid, 10) : null
+    }
+
     private device: null | FileHandle = null
     private promise: null | Promise<void> = null
     private readonly abort = new AbortController()
